@@ -185,10 +185,10 @@ if upld == 'y':
 
         if git_file in all_files:
             contents = repo.get_contents(git_file)
-            repo.update_file(contents.path, "committing files", content, contents.sha, branch="main")
+            repo.update_file(contents.path, "updated " + maxdatum.strftime("%d-%m-%Y"), content, contents.sha, branch="main")
             print(git_file + ' updated')
         else:
-            repo.create_file(git_file, "committing files", content, branch="main")
+            repo.create_file(git_file, "created " + maxdatum.strftime("%d-%m-%Y"), content, branch="main")
             print(git_file + ' created')
     print('Completed.')
 
