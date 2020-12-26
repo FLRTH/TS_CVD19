@@ -1,7 +1,6 @@
+#!/usr/bin/env python
 
 # coding: utf-8
-
-# In[170]:
 
 
 ############################################################################
@@ -11,8 +10,7 @@
 #############################
 
 
-# In[258]:
-
+print('>> Start...')
 
 import requests
 import pandas as pd
@@ -23,9 +21,16 @@ from bs4 import BeautifulSoup
 from datetime import timedelta
 from datetime import datetime as dt
 from github import Github
+import os
+
+print('>> Getting data')
 
 dataURL = 'https://5vier.de/corona-update-208649.html' # Official press statements collected in one page
 inhabitantsDataURL = r'https://raw.githubusercontent.com/FLRTH/TS_CVD19/main/trier_saarburg_vg_inhabitants.csv' # Inhabitants organised in csv file
+auxDataURL = r'https://raw.githubusercontent.com/FLRTH/TS_CVD19/main/COVID-19_LK_TRIER_SAARBURG_DATA.csv'
+
+github_access = 'tscvd19_github_access.txt'
+saveFolder = 'tscvd19_saveFolder.txt'
 
 vgdf = pd.read_csv(inhabitantsDataURL) # Get inhabitants data
 vg_data = pd.Series(vgdf.inhabitants.values,index=vgdf.vg).to_dict()
@@ -42,6 +47,8 @@ tmpIndex = 0 # handles 2 lines of data in source
 tf = 30 # timeframe to plot
 udates = [] # Array to store dates
 tmpArray = [] # Array to store data
+
+print('>> Processing data')
 
 for line in soupArray:
     if line[:2] == 'Am' and firstScan: # first element is different from subsequent elements
@@ -64,15 +71,115 @@ for line in soupArray:
             try:
                 tmpArray.append([uDate.replace('-',''), e.split(': ')[0].replace(' ','').replace(',','').replace('.',''), e.split(': ')[1].replace(' ','').replace(',','').replace('.','')]) # add data
             except:
-                tmpArray.append([uDate, 'ERROR', 'ERROR']) # if data has errors, add as error   
+                tmpArray.append([uDate, 'ERROR', 'ERROR']) # if data has errors, add as error    
                 
 for t in tmpArray: # first date retrieval is different - add the latest date
     if t[0] == '':
         t[0] = firstDate
+
+
+
         
+
 df = pd.DataFrame(tmpArray, columns=["Date", "VG", "CASES"]) # build data frame
 df = df[df['VG'] != 'ERROR'] # remove errors
 df = df[df['Date'].str.contains("2020")] # remove date errors
+
+dftmp = df.copy()
+dftmp[['day','month','year']] = df.Date.str.split(".",expand=True,)
+dftmp['imonth'] = pd.to_numeric(dftmp.month, errors='coerce')
+dftmp['Date'] = pd.to_datetime(dftmp[['year', 'month', 'day']],format='%Y%m%d')
+tmpmaxDate = dftmp['Date'].max()
+
+
+
+auxRawData = pd.read_csv(auxDataURL) # Get inhabitants data
+auxRawData.drop(['7D_INCIDENCE_100T', '7D_INCREMENT', 'INCREMENT'], axis=1, inplace=True)
+auxRawData[['year','month','day']] = auxRawData.Date.str.split("-",expand=True,)
+auxRawData['tmpDate'] = pd.to_datetime(auxRawData[['year', 'month', 'day']],format='%Y%m%d')
+maxAuxDate = auxRawData['tmpDate'].max()
+auxRawData['Date'] = auxRawData['day'] + '.' + auxRawData['month'] + '.' + auxRawData['year']
+auxRawData = auxRawData[['Date', 'VG', 'CASES']]
+auxtmpArray = auxRawData.as_matrix().tolist()
+
+daytrys = dt.today().date().day
+trys = True
+
+# if the latest data is not available on the usual article, fetch latest data from a different source
+if dt.today().date() > tmpmaxDate.date():
+    print('>> Main data source outdated - switching to auxiliary data source')
+    
+    auxBaseURL = 'https://trier-saarburg.de/'
+    
+    while trys:
+        if maxAuxDate.date().day == daytrys:
+            trys = False
+        if maxAuxDate.date().day == dt.today().date().day:
+            print('>> Latest data already available in auxiliary data source')
+            tmpArray = auxtmpArray
+            df = pd.DataFrame(tmpArray, columns=["Date", "VG", "CASES"]) # build data frame
+            df = df[df['VG'] != 'ERROR'] # remove errors
+            df = df[df['Date'].str.contains("2020")] # remove date errors
+        if trys:
+            firstAux = False
+            if maxAuxDate.date() > tmpmaxDate.date() and maxAuxDate.date().day <= daytrys:
+                print('>> Retrieving heritage data')
+                tmpArray = auxtmpArray
+                auxURL = auxBaseURL + str(dt.today().date().year) + '/' + str(dt.today().date().month) + '/' + str(daytrys) + '/'
+                daytrys = daytrys - 1
+            elif dt.today().date().day == tmpmaxDate.date().day+1:
+                auxURL = auxBaseURL + str(dt.today().date().year) + '/' + str(dt.today().date().month) + '/' + str(dt.today().date().day) + '/'
+            else:
+                auxURL = auxBaseURL + str(dt.today().date().year) + '/' + str(dt.today().date().month) + '/' + str(tmpmaxDate.date().day + 1) + '/'
+
+            auxpage = requests.get(auxURL) # Get raw data
+            auxsoup = BeautifulSoup(auxpage.content, 'html.parser') # parse html
+            auxsoupArray = auxsoup.get_text().split("\n") # split webpage line by line
+
+
+            tmpDate = '0' # tmp date
+            auxuDate = '' # stores dates temporarily
+            tmpIndex = 0 # handles 2 lines of data in source
+            tf = 30 # timeframe to plot
+            auxudates = [] # Array to store dates
+
+            tmpDate = tmpmaxDate.date() + timedelta(days=1)
+            latestDate = str(daytrys+1) + '.' + str(tmpDate.month) + '.' + str(tmpDate.year)
+            #print(latestDate)
+
+            print('>> Processing data')
+            for line in auxsoupArray:
+                if line[:2] == 'VG': # find data position
+                    #print(line)
+
+                    tmpvg = line.replace('\xa0','')
+                    tmpvgArray = tmpvg.split('VG ')
+                    #print(tmpvgArray)
+                    tmpvgArray = list(filter(None, tmpvgArray))
+                    if auxsoupArray.index(line)==tmpIndex+1:
+                        getVG = False
+                    tmpIndex = auxsoupArray.index(line)
+                    for e in tmpvgArray:
+                        #print(latestDate)
+                        try:
+                            tmpArray = [([auxuDate.replace('-',''), e.split(': ')[0].replace(' ','').replace(',','').replace('.',''), e.split(': ')[1].replace(' ','').replace(',','').replace('.','')])] + tmpArray # add data
+                            #tmpArray.append([auxuDate.replace('-',''), e.split(': ')[0].replace(' ','').replace(',','').replace('.',''), e.split(': ')[1].replace(' ','').replace(',','').replace('.','')]) # add data
+                        except:
+                            tmpArray = [([auxuDate, 'ERROR', 'ERROR'])] + tmpArray # if data has errors, add as error    
+            for t in tmpArray: # first date retrieval is different - add the latest date
+                if t[0] == '':
+                    t[0] = latestDate #firstDate
+
+            #print(tmpArray)
+            df = pd.DataFrame(tmpArray, columns=["Date", "VG", "CASES"]) # build data frame
+            df = df[df['VG'] != 'ERROR'] # remove errors
+            df = df[df['Date'].str.contains("2020")] # remove date errors
+
+        
+#print(df)
+
+
+#print('Reformat dates')
 
 # date format is difficult to handle - rebuild dates from scratch
 df[['day','month','year']] = df.Date.str.split(".",expand=True,)
@@ -82,6 +189,8 @@ df['Date'] = pd.to_datetime(df[['year', 'month', 'day']],format='%Y%m%d')
 df.drop(['day', 'imonth', 'month', 'year'], axis=1, inplace=True)
 df['Date'] = df['Date'].dt.date
 dfvg = pd.DataFrame(columns=["Date", "VG", "CASES", "INCREMENT"]) # empty data frame
+
+#print('Build data set')
 
 for vg in list(vg_data.keys()): # loop through elements
     dfk = df[df['VG'] == vg] # filter elements
@@ -99,9 +208,13 @@ df = dfvg
 
 df.CASES = pd.to_numeric(df.CASES, errors='coerce')
 
-#df.to_excel("Trier-Saarburg" + maxdatum.strftime("%d-%m-%Y") + ".xlsx", index=False)
+#print('Save csv')
+
+saveto = open(saveFolder, "r").readline().split(';')[0]
+df.to_excel(saveto + "Trier-Saarburg_" + maxdatum.strftime("%d-%m-%Y") + ".xlsx", index=False)
 df.to_csv("COVID-19_LK_TRIER_SAARBURG_DATA.csv", index=False)
 
+#print('Build overview')
 # build overview table
 dft = df.copy()
 dft = dft[['VG','Date', 'INCREMENT','CASES','7D_INCIDENCE_100T','7D_INCREMENT']]
@@ -113,9 +226,11 @@ ax.axis('tight')
 ax.axis('off')
 ax.table(cellText=dft.values,colLabels=dft.columns,rowLabels=vgs,loc="center")
 
-plt.show()
-ax.figure.savefig('LANDKREIS.pdf') #maxdatum.strftime("%d-%m-%Y") + '_LANDKREIS.png')
+#plt.show()
+ax.figure.savefig('LANDKREIS.pdf', bbox_inches = "tight") #maxdatum.strftime("%d-%m-%Y") + '_LANDKREIS.png')
 
+print('---------------------------------------------------------------------')
+#print('Create charts')
 for vg in list(vg_data.keys()): # loop through elements
     dfk = df[df['VG'] == vg] # filter only on elements
     dfk = dfk.reset_index(drop=True)
@@ -136,34 +251,50 @@ for vg in list(vg_data.keys()): # loop through elements
         nSign = '-'
     else:
         nSign = '+'
-    bartitle = vg + ' - ' + str(maxdatum.strftime("%d.%m.%Y")) + ' ' + nSign + str(latestNumber) + ' | 7-Tage Inzidenz: ' + str(incdn) + ' / 100t' # title
+    if len(str(latestNumber)) == 1:
+        ltstNbr = ' ' + str(latestNumber)
+    else:
+        ltstNbr = str(latestNumber)
+    bartitle = vg + ' - ' + str(maxdatum.strftime("%d.%m.%Y")) + ' ' + nSign + ltstNbr + ' | 7-Tage Inzidenz: ' + str(incdn) + ' / 100t' # title
+    if len(bartitle.split(' - ')[0])>10:
+        tbs = ':\t'
+    else:
+        tbs = ':\t\t'
+    if len(bartitle.split(' - ')[1].split(': ')[1]) == 9:
+        ldspc = ' '
+    else:
+        ldspc = ''
+    print('>> ' + bartitle.split(' - ')[0] + tbs + bartitle.split(' - ')[1].split(': ')[0] + ': ' + ldspc + bartitle.split(' - ')[1].split(': ')[1])
     dfk = dfk.pivot("Date", "VG", "INCREMENT").plot(kind='bar', title=bartitle) #.set_xticklabels([])
 
-    plt.show()
+    #plt.show()
     dfk.figure.savefig(vg + '.pdf', bbox_inches = "tight") #maxdatum.strftime("%d-%m-%Y") + '_' + vg + '.png', bbox_inches = "tight")
     
-    
 
-upld = input('Upload to github? y/n ')
+# collect upload elements
+uploadContent = list(vg_data.keys())
+uploadContent.append('LANDKREIS')
+uploadContent.append('COVID-19_LK_TRIER_SAARBURG_DATA.csv')
+    
+# reformat / could be done differently by scanning root folder for elements in uploadContent
+i = 0
+for x in uploadContent:
+    if not x.endswith('.csv'):
+        x = x + '.pdf'
+        uploadContent[i] = x
+        i = i+1
+
+print('---------------------------------------------------------------------')
+
+print('>> Latest on github:\t' + str(maxAuxDate.date().day) + '.' + str(maxAuxDate.date().month) + '.' + str(maxAuxDate.date().year))
+
+upld = input('>> Upload to github? y/n ')
 
 if upld == 'y':
-    print('Uploading...')
-    token = open("github_access.txt", "r").readline().split(';')[0]
+    print('>> Uploading...')
+    token = open(github_access, "r").readline().split(';')[0]
     g = Github(token) # log-in
     repo = g.get_user().get_repo('TS_CVD19')
-    
-    # collect upload elements
-    uploadContent = list(vg_data.keys())
-    uploadContent.append('LANDKREIS')
-    uploadContent.append('COVID-19_LK_TRIER_SAARBURG_DATA.csv')
-    
-    # reformat / could be done differently by scanning root folder for elements in uploadContent
-    i = 0
-    for x in uploadContent:
-        if not x.endswith('.csv'):
-            x = x + '.pdf'
-            uploadContent[i] = x
-            i = i+1
 
     # based on example to be found on stackoverflow by Bhuvanesh: https://stackoverflow.com/questions/63427607/python-upload-files-directly-to-github-using-pygithub
     all_files = []
@@ -176,19 +307,24 @@ if upld == 'y':
             file = file_content
             all_files.append(str(file).replace('ContentFile(path="','').replace('")',''))
 
-    for c in uploadContent:  
-        with open(c, 'rb') as file:
-            content = file.read()
+    for c in uploadContent:
+        if c.endswith('.csv'):
+            with open(c, 'r') as file:
+                content = file.read()
+        else:  
+            with open(c, 'rb') as file:
+                content = file.read()
 
         # Upload to github
         git_file = c
-
         if git_file in all_files:
             contents = repo.get_contents(git_file)
             repo.update_file(contents.path, "updated " + maxdatum.strftime("%d-%m-%Y"), content, contents.sha, branch="main")
-            print(git_file + ' updated')
+            print('>> ' + git_file + ' updated')
         else:
             repo.create_file(git_file, "created " + maxdatum.strftime("%d-%m-%Y"), content, branch="main")
-            print(git_file + ' created')
-    print('Completed.')
+            print('>> ' + git_file + ' created')
+    print('>> Completed.')
 
+for c in uploadContent:
+    os.remove(c)
